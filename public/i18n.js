@@ -1,8 +1,8 @@
 'use strict';
 /**
  * FanBox i18n —— 集中式翻译层。
- * 词典在 i18n-dict.js（中文原文为键）；中文是源语言，zh 模式下本文件几乎不做事。
- * lang 取值：'zh'（源语言，恒等）/ 'en'（内建英文词典）/ 'custom:<id>'（用户匯入的语言包）。
+ * 词典在 i18n-dict.js（英文原文为键 → 简中译文）；英文是源语言，en 模式下本文件几乎不做事。
+ * lang 取值：'en'（源语言，恒等）/ 'zh'（内建简中词典）/ 'custom:<id>'（用户匯入的语言包，en 键空间）。
  * 翻译机制：MutationObserver 在微任务时机翻译新增/变更的文本节点和 title/placeholder 属性，
  * 绘制前完成、无闪烁，app.js 不需要散布翻译调用。用户内容区（预览/编辑器/终端）一律不碰。
  */
@@ -32,7 +32,7 @@
   };
 
   // ---------- 词典/规则来源参数化 ----------
-  // EN：内建词典（i18n-dict.js）；custom：导入的语言包（先用缓存，后台刷新）
+  // zh：内建词典（i18n-dict.js）；custom：导入的语言包（先用缓存，后台刷新）；en：恒等，不需要词典
   let dict = () => ({});
   let rules = () => [];
   let pendingPackFetch = null;
@@ -63,7 +63,7 @@
     })
     .catch(() => null);
 
-  if (lang === 'en') {
+  if (lang === 'zh') {
     dict = () => window.FANBOX_DICT || {};
     rules = () => window.FANBOX_DICT_RULES || [];
   } else if (isCustom(lang)) {
@@ -115,19 +115,19 @@
       const reader = new FileReader();
       reader.onload = () => {
         let pack;
-        try { pack = JSON.parse(String(reader.result)); } catch { alert(tt('导入失败：不是合法的 JSON 文件')); return; }
+        try { pack = JSON.parse(String(reader.result)); } catch { alert(tt('Import failed: not a valid JSON file')); return; }
         if (!pack || typeof pack !== 'object' || !pack.id || !pack.name || !pack.lang || !pack.dict || typeof pack.dict !== 'object') {
-          alert(tt('导入失败：语言包缺少 id / name / lang / dict 字段'));
+          alert(tt('Import failed: language pack is missing id / name / lang / dict fields'));
           return;
         }
         fetch('/api/lang-pack/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(pack) })
           .then((r) => r.json())
           .then((res) => {
-            if (!res.ok) { alert(tt('导入失败：') + (res.error || tt('未知错误'))); return; }
+            if (!res.ok) { alert(tt('Import failed: ') + (res.error || tt('Unknown error'))); return; }
             localStorage.setItem('fb_custom_pack', JSON.stringify({ id: pack.id, name: pack.name, lang: pack.lang, dict: pack.dict, rules: pack.rules || [] }));
             window.fanboxSetLang('custom:' + pack.id, pack.lang);
           })
-          .catch(() => alert(tt('导入失败：网络错误')));
+          .catch(() => alert(tt('Import failed: network error')));
       };
       reader.readAsText(file);
     };
@@ -154,7 +154,7 @@
     menu.appendChild(sep);
     const importItem = document.createElement('div');
     importItem.className = 'lang-menu-item';
-    importItem.textContent = '导入语言包…';
+    importItem.textContent = 'Import language pack…';
     importItem.onclick = () => { closeMenu(); doImport(); };
     menu.appendChild(importItem);
 
@@ -170,7 +170,7 @@
   const wireToggle = () => {
     const el = document.getElementById('lang-toggle');
     if (!el) return;
-    el.title = '切换界面语言';
+    el.title = 'Switch interface language';
     el.textContent = shortLabel();
     el.onclick = (ev) => {
       ev.stopPropagation();
@@ -184,9 +184,8 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', wireToggle);
   else wireToggle();
 
-  if (lang === 'zh') { window.t = (s) => s; return; }
+  if (lang === 'en') { window.t = (s) => s; return; }
 
-  const HAN = /[㐀-鿿「」（）：；！？…·]/;
   const trOne = (core) => {
     const hit = dict()[core];
     if (hit !== undefined) return hit;
@@ -199,11 +198,12 @@
     return null;
   };
   const tr = (s) => {
-    if (!s || !HAN.test(s)) return s;
+    if (!s) return s;
     const core = s.trim();
+    if (!core) return s; // 纯空白/空字符串：提前返回，省一次查表
     const whole = trOne(core);
     if (whole !== null) return s.replace(core, whole);
-    // 复合文案（「刚刚 · 12 条消息 · 改了 16 个文件」）整段匹配不上：按 · 分段逐段翻
+    // 复合文案（「just now · 12 messages · changed 16 files」）整段匹配不上：按 · 分段逐段翻
     if (core.includes('·')) {
       const segs = core.split('·').map((x) => x.trim()).filter(Boolean);
       const parts = segs.map((x) => trOne(x) ?? x);
@@ -243,7 +243,7 @@
   const start = () => {
     visit(document.body);
     ob.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ATTRS });
-    document.documentElement.lang = lang === 'en' ? 'en' : (packLangTag || lang.slice(7));
+    document.documentElement.lang = lang === 'zh' ? 'zh-CN' : (packLangTag || lang.slice(7));
   };
   const startWhenReady = () => {
     if (document.body) start(); else document.addEventListener('DOMContentLoaded', start);
