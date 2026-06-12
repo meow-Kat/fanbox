@@ -11,6 +11,13 @@
 
 ## [Unreleased]
 
+### Added
+- 语言包匯入：侧栏语言切换从「中/EN 二元开关」升级为弹出选单，新增「导入语言包…」——选一个 JSON 语言包（`{id, name, lang, dict, rules?}`，繁中包随仓库附在 `lang-packs/zh-TW.json`）即持久化到 `~/.fanbox/lang-packs/`，同 id 重新导入即覆盖更新（不满意的词条改 JSON 重导即可，不用等发版）。配套 server 端点：`POST /api/lang-pack/import`（schema 校验 + 1MB 上限 + id 防穿越）、`GET /api/lang-packs`、`GET /api/lang-pack?id=`
+- 繁体中文官方语言包 `lang-packs/zh-TW.json`：291 词条按台湾用语在地化（文件→檔案、搜索→搜尋、保存→儲存……），71 条动态文案规则（相对时间、文件计数、会话摘要等）全量移植，非单纯简繁字转
+
+### Removed
+- 「索引」（editorial）皮肤下架，皮肤保留 档案（warm）与 终端（Volt）两套；曾选过索引皮肤的用户下次启动自动落回终端皮肤
+
 ## [1.7.2] - 2026-06-11
 
 ### Changed

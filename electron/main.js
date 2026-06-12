@@ -195,10 +195,14 @@ ipcMain.handle('update:open', (e, { url }) => { if (/^https:\/\/github\.com\//.t
 ipcMain.handle('update:get', () => pendingUpdate);
 
 // 界面语言：用户手动选过的存在 ~/.fanbox/config.json（渲染层切换时写入），没选过跟随系统
+// 原生菜单维持 zh/en 二元：custom:<id> 按语言包声明的 langTag 映射（zh* → zh，否则 en）
 function uiLang() {
   try {
     const c = JSON.parse(fs.readFileSync(path.join(os.homedir(), '.fanbox', 'config.json'), 'utf8'));
     if (c.lang === 'zh' || c.lang === 'en') return c.lang;
+    if (typeof c.lang === 'string' && c.lang.startsWith('custom:')) {
+      return String(c.langTag || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
+    }
   } catch { /* 没配置过 */ }
   return String(app.getLocale() || '').toLowerCase().startsWith('zh') ? 'zh' : 'en';
 }

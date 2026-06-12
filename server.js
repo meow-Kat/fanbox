@@ -21,6 +21,7 @@ const PORT = Number(process.env.FANBOX_PORT) || 4567;
 const CONFIG_DIR = path.join(HOME, '.fanbox');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
 const THUMB_DIR = path.join(CONFIG_DIR, 'thumbs');
+const LANG_PACK_DIR = path.join(CONFIG_DIR, 'lang-packs');
 const PUBLIC = path.join(__dirname, 'public');
 const PLATFORM = process.platform;
 
@@ -131,6 +132,68 @@ function sendJSON(res, code, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(body);
+}
+
+// ---------- 语言包：导入/列表/读取 ----------
+// 自定义语言包持久化在 ~/.fanbox/lang-packs/<id>.json，走与 config.json 相同的「temp + rename」原子写。
+const LANG_PACK_ID_RE = /^[a-z0-9-]{1,40}$/;
+const LANG_TAG_RE = /^[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*$/;
+const MAX_LANG_PACK_SIZE = 1024 * 1024; // 1MB
+
+function validateLangPack(pack) {
+  if (!pack || typeof pack !== 'object') return '语言包必须是 JSON 对象';
+  if (typeof pack.id !== 'string' || !LANG_PACK_ID_RE.test(pack.id)) return 'id 格式不合法（仅允许小写字母/数字/-，1~40 字符）';
+  if (typeof pack.name !== 'string' || !pack.name) return 'name 不可为空';
+  if (typeof pack.lang !== 'string' || !LANG_TAG_RE.test(pack.lang)) return 'lang 不是合法的语言标签（如 zh-TW）';
+  if (!pack.dict || typeof pack.dict !== 'object' || Array.isArray(pack.dict)) return 'dict 必须是平面对象';
+  for (const [k, v] of Object.entries(pack.dict)) {
+    if (typeof k !== 'string' || !k || typeof v !== 'string' || !v) return 'dict 的键值都必须是非空字符串';
+  }
+  if (pack.rules !== undefined) {
+    if (!Array.isArray(pack.rules)) return 'rules 必须是数组';
+    for (const r of pack.rules) {
+      if (!Array.isArray(r) || r.length !== 2 || typeof r[0] !== 'string' || typeof r[1] !== 'string') return 'rules 的每一项必须是 [正则字符串, 替换字符串]';
+      try { new RegExp(r[0]); } catch { return `rules 中的正则不合法：${r[0]}`; }
+    }
+  }
+  if (Buffer.byteLength(JSON.stringify(pack), 'utf8') > MAX_LANG_PACK_SIZE) return '语言包过大（上限 1MB）';
+  return null;
+}
+
+async function writeLangPack(pack) {
+  await fsp.mkdir(LANG_PACK_DIR, { recursive: true });
+  const file = path.join(LANG_PACK_DIR, `${pack.id}.json`);
+  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    const fh = await fsp.open(tmp, 'w');
+    try { await fh.writeFile(JSON.stringify(pack, null, 2)); await fh.sync(); } finally { await fh.close(); }
+    await fsp.rename(tmp, file);
+  } catch (e) { await fsp.unlink(tmp).catch(() => {}); throw e; }
+}
+
+async function listLangPacks() {
+  const packs = [];
+  let entries;
+  try { entries = await fsp.readdir(LANG_PACK_DIR); } catch { return packs; }
+  for (const name of entries) {
+    if (!name.endsWith('.json')) continue;
+    try {
+      const raw = await fsp.readFile(path.join(LANG_PACK_DIR, name), 'utf8');
+      const pack = JSON.parse(raw);
+      if (pack && typeof pack.id === 'string' && typeof pack.name === 'string' && typeof pack.lang === 'string') {
+        packs.push({ id: pack.id, name: pack.name, lang: pack.lang });
+      }
+    } catch { /* 跳过无法解析的文件 */ }
+  }
+  return packs;
+}
+
+async function readLangPack(id) {
+  if (!LANG_PACK_ID_RE.test(id)) return null;
+  try {
+    const raw = await fsp.readFile(path.join(LANG_PACK_DIR, `${id}.json`), 'utf8');
+    return JSON.parse(raw);
+  } catch { return null; }
 }
 
 // ---------- 业务逻辑 ----------
@@ -1870,9 +1933,35 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === '/api/lang' && req.method === 'POST') {
       const b = await readBody(req);
-      const lang = b.lang === 'en' ? 'en' : 'zh';
-      await updateConfig((c) => { c.lang = lang; });
+      const custom = typeof b.lang === 'string' && /^custom:[a-z0-9-]{1,40}$/.test(b.lang) && LANG_PACK_ID_RE.test(b.lang.slice(7));
+      const lang = b.lang === 'en' || custom ? b.lang : 'zh';
+      await updateConfig((c) => {
+        c.lang = lang;
+        if (custom && typeof b.langTag === 'string' && LANG_TAG_RE.test(b.langTag)) c.langTag = b.langTag;
+        else delete c.langTag;
+      });
       return sendJSON(res, 200, { ok: true, lang });
+    }
+    if (p === '/api/lang-pack/import' && req.method === 'POST') {
+      const pack = await readBody(req);
+      const err = validateLangPack(pack);
+      if (err) return sendJSON(res, 200, { ok: false, error: err });
+      try {
+        await writeLangPack(pack);
+        return sendJSON(res, 200, { ok: true, id: pack.id });
+      } catch (e) {
+        return sendJSON(res, 200, { ok: false, error: String(e.message || e) });
+      }
+    }
+    if (p === '/api/lang-packs') {
+      return sendJSON(res, 200, { ok: true, packs: await listLangPacks() });
+    }
+    if (p === '/api/lang-pack') {
+      const id = url.searchParams.get('id') || '';
+      if (!LANG_PACK_ID_RE.test(id)) return sendJSON(res, 200, { ok: false });
+      const pack = await readLangPack(id);
+      if (!pack) return sendJSON(res, 200, { ok: false });
+      return sendJSON(res, 200, pack);
     }
     if (p === '/api/organize/launch' && req.method === 'POST') {
       return sendJSON(res, 200, await organizeLaunch(await readBody(req)));
